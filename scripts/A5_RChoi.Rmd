@@ -1,0 +1,489 @@
+---
+title: 'Assignment 5: Investigating the Molecular Phylogenetics and Congruence of COI and CytB Genes
+  in the Accipitridae Family'
+author: "Rebecca Choi"
+date: "2024-12-06"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    keep_tex: true
+  html_document: default
+  word_document: default
+geometry: a4paper, margin=1in
+---
+# Introduction
+Phylogenetics is a cornerstone of evolutionary biology that offers insights into the evolutionary relationships among species and the genetic mechanisms underlying these relationships (Stiller et al., 2024). One significant focus of phylogenetic research is the use of mitochondrial genes, such as cytochrome oxidase I (COI) and cytochrome b (CytB), to reconstruct evolutionary trees (Ladoukakis and Zouros, 2017). These genes are widely utilized because mitochondrial DNA (mtDNA) is maternally inherited, evolves relatively rapidly, and lacks recombination, making it ideal for resolving evolutionary relationships at different taxonomic levels. Studying phylogenetic relationships is particularly relevant for the Accipitridae family, which includes hawks, eagles, and other raptors. These birds play a critical role in maintaining ecological balance as apex predators and indicators of ecosystem health (Lerner and Mindell, 2005). Understanding their evolutionary history can inform conservation strategies for this ecologically and culturally significant group.
+
+One gap in phylogenetic research is in understanding how different mitochondrial genes contribute to phylogenetic inference (Luchetti and Plazzi, 2022). While both COI and CytB are frequently used for molecular systematics, they may develop differing phylogenetic trees due to differences in their molecular evolutionary rates, functional constraints, and substitution patterns. For instance, differences in how evolutionary relationships are resolved may result from biases specific to each gene or variations in the rates that their sequences evolve. Moreover, hybridization, introgression, and incomplete lineage sorting in the evolutionary history of Accipitridae may lead to discrepancies between the phylogenetic signals of these two genes (Xu et al., 2023). These factors make it essential to compare the trees inferred from COI and CytB to assess their congruence and understand the factors driving potential differences.
+
+The objective of this study was to test the hypothesis that the mitochondrial COI and CytB genes produce the same phylogenetic relationships for the Accipitridae family. This hypothesis assumed that, as mitochondrial genes, COI and CytB share similar evolutionary pressures, mutation rates, and inheritance patterns, leading to consistent phylogenetic reconstructions. To test this, phylogenetic trees were reconstructed using maximum likelihood methods for COI and CytB genes and compared using both visual and quantitative approaches. A heatmap of cophenetic distance differences was created to highlight discrepancies between the trees. This study is hypothesis-driven, focusing on testing whether two commonly used mitochondrial genes yield congruent phylogenetic hypotheses, with implications for the reliability of mtDNA in phylogenetic inference. Insights from this study will improve our understanding of how differences between genes and their evolutionary histories influence phylogenetic results and guides the methods used in molecular phylogenetics. 
+
+# Description of Dataset
+
+The datasets analyzed in this study consisted of nucleotide sequences for the mitochondrial COI and CytB genes from hawk, eagle and other related raptor species in the Accipitridae family. The data was last retrieved from the NCBI nucleotide database on December 4, 2024 using the rentrez package in R (NCBI, 2024). The search parameters restricted the sequences to those labeled as COI or CytB, with lengths between 600 and 1000 base pairs to ensure partial but sufficiently informative sequences for phylogenetic analysis. A maximum of 300 sequence entries was chosen for each gene to capture a broad representation of available data while maintaining computational efficiency during alignment, model selection, and tree reconstruction. This number provides enough taxonomic diversity while remaining manageable for data processing and analysis. After filtering for quality and identifying shared species, the dataset included 14 shared species between the COI and CytB datasets. Moreover, the FASTA files contained sequence headers, which included metadata such as species names. Other variables such as pairwise evolutionary distances were derived during the analysis through phylogenetic reconstruction, using tools like maximum likelihood methods. These derived variables were critical for comparing the evolutionary relationships inferred from COI and CytB. 
+	
+# Code Section 1 - Data Acquisition, Exploration, Filtering, and Quality Control 
+```{r setup}
+library(knitr)
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE,
+	tidy = TRUE,
+	tidy.opts = list(width.cutoff = 80)
+)
+library(tidyverse)
+library(styler)
+library(rentrez) # NCBI search
+library(Biostrings) # readDNAStringSet function
+library(stringr) # to make functions
+library(DECIPHER) #BrowseSeqs
+library(muscle) # muscle function
+library(phytools) # comparePhylo function
+library(phangorn) #modelTest() function
+library(ape) # phylogenetic tree comparison
+library(patchwork) # Putting both maximum likelihood phylogenetic trees next to each other
+library(ggtree) # ggtree function
+library(pheatmap) # heatmap
+
+```
+
+```{r NCBI Search}
+
+# This code retrieves nucleotide sequences for the COI and CytB genes from the NCBI nucleotide database for species in the Accipitridae family (hawks and eagles). The sequences were most recently collected on December 4th, 2024.
+# The search is restricted to sequences with lengths between 600 and 1000 base pairs to ensure partial but sufficiently informative sequences are included. 600-1000 base pairs supports standardization in sequence comparison by avoiding extremely short or long sequences that might introduce bias, while still retaining the sequences likely to encode functional regions of the target genes.
+# The retrieved results are summarized, and unique species names are extracted for both COI and CytB genes. 
+
+Acc_search_COI <- entrez_search(db = "nuccore", term = "Accipitridae[ORGN] AND (COI[Gene] OR CO1[Gene] OR COX1[Gene] AND 600:1000[SLEN])", retmax = 300) 
+Acc_summ_COI <- entrez_summary(db = "nuccore", id = Acc_search_COI$ids)
+Acc_sp_unique_COI <- Acc_summ_COI %>%
+  map_chr(~ .x$organism) %>%
+  unique() %>%
+  as.list()
+
+Acc_search_CytB <- entrez_search(db = "nuccore", term = "Accipitridae[ORGN] AND (Cytb[Gene] OR Cyt B[Gene] AND 600:1000[SLEN])", retmax = 300) 
+Acc_summ_CytB <- entrez_summary(db = "nuccore", id = Acc_search_CytB$ids) 
+Acc_sp_unique_CytB <- Acc_summ_CytB %>%
+  map_chr(~ .x$organism) %>%
+  unique() %>%
+  as.list()
+
+# Shared species between COI and CytB datasets are identified for downstream phylogenetic comparison and printed as a single, comma-separated line for concise output.
+cat("Shared species:", paste(Acc_sp_unique_CytB[Acc_sp_unique_CytB %in% Acc_sp_unique_COI], collapse = ", "), "\n") # 14 shared species
+
+```
+
+```{r Sequences Fetch}
+
+# This step fetches the nucleotide sequences for COI and CytB genes from the NCBI nucleotide database using the sequence IDs.
+# The sequences are retrieved in FASTA format and saved as separate files for reproducibility and offline use.
+Acc_fasta_COI <- entrez_fetch(db = "nuccore", id = Acc_search_COI$ids, rettype = "fasta")
+Acc_fasta_CytB <- entrez_fetch(db = "nuccore", id = Acc_search_CytB$ids, rettype = "fasta")
+write(Acc_fasta_COI, "../data/Accipitridae_COI.fasta", sep = "\n")
+write(Acc_fasta_CytB, "../data/Accipitridae_CytB.fasta", sep = "\n")
+
+# The FASTA files are then read into R as DNAStringSet objects which allow efficient handling of nucleotide sequence data for downstream analysis like sequence alignment.
+Acc_strings_COI <- readDNAStringSet("../data/Accipitridae_COI.fasta")
+Acc_strings_CytB <- readDNAStringSet("../data/Accipitridae_CytB.fasta")
+
+# The sequences are converted into data frames containing the sequence titles and the nucleotide sequences. Doing this organizes the data into a  tabular format which makes it easier to clean, filter, and analyze later.
+dfCOI_Acc <- data.frame(Title = names(Acc_strings_COI), Sequences = paste(Acc_strings_COI))
+dfCytB_Acc <- data.frame(Title = names(Acc_strings_CytB), Sequences = paste(Acc_strings_CytB))
+
+```
+
+```{r Data Cleaning and Formatting}
+
+# This chunk is where COI and CytB sequence data is processed to extract relevant information and prepare it for further analysis.
+# The "Species_Name" column is created by extracting the second and third words from the sequence title since these are species' scientific names.
+# Then, "Sequence_Length" column is calculated for each sequence to provide the total number of nucleotides in the sequence. In a future step, this column will be used to check the distribution of sequence lengths.
+# The columns are then reorganized to be in this order: "Species_Name", "Sequences", "Title", and "Sequence_Length".
+dfCOI_Acc$Species_Name <- word(dfCOI_Acc$Title, 2L, 3L)
+dfCOI_Acc$Sequence_Length <- nchar(dfCOI_Acc$Sequences)
+dfCOI_Acc <- dfCOI_Acc[, c("Species_Name", "Sequences","Title", "Sequence_Length")]
+
+dfCytB_Acc$Species_Name <- word(dfCytB_Acc$Title, 2L, 3L)
+dfCytB_Acc$Sequence_Length <- nchar(dfCytB_Acc$Sequences)
+dfCytB_Acc <- dfCytB_Acc[, c("Species_Name", "Sequences","Title", "Sequence_Length")]
+
+
+# The species names in the COI and CytB datasets are compared to ensure there are sufficient shared species (at least 10, as recommended for this project).
+# The summary confirms that there are 14 shared species (TRUE results), which is adequate for downstream phylogenetic analysis.
+unique(dfCytB_Acc$Species_Name) %in% (dfCOI_Acc$Species_Name) %>% 
+  summary()
+
+
+```
+
+
+```{r Histogram of Sequence Lengths}
+
+# This code chunk creates histograms to visualizes the distribution of sequence lengths for the COI and CytB gene on the same axes. 
+# The x-axis limits are set based on the minimum and maximum sequence lengths across both datasets (COI and CytB) to standardize the comparison.
+hist(dfCOI_Acc$Sequence_Length,
+     breaks = 30,
+     xlim = c(min(c(dfCOI_Acc$Sequence_Length, dfCytB_Acc$Sequence_Length)),
+              max(c(dfCOI_Acc$Sequence_Length, dfCytB_Acc$Sequence_Length))),
+     col = rgb(1, 0, 0, 0.5),
+     xlab = "Sequence Length",
+     ylab = "Frequency",
+     main = "Distribution of Sequence Lengths for COI and CytB")
+
+# This adds the histogram for the CytB gene sequence lengths to the same plot for direct comparison.
+hist(dfCytB_Acc$Sequence_Length, 
+     breaks = 30, 
+     col = rgb(0, 0, 1, 0.5), 
+     add = TRUE) # "add = TRUE" argument overlays this histogram on the existing COI plot
+
+# This legendimproves plot readability by clearly associating each color with the corresponding dataset.
+legend("topright", 
+       legend = c("COI", "CytB"), 
+       col = c(rgb(1, 0, 0, 0.5), rgb(0, 0, 1, 0.5)), 
+       pt.cex = 2, 
+       pch = 15)
+
+```
+In our histogram, COI sequences of the Accipitridae family are predominantly concentrated between 600–700 base pairs, while CytB sequences display a broader range, with peaks near 700 base pairs and additional frequencies extending beyond 800 base pairs. Although the highest frequency occurs within the shorter length ranges, the sequence range of 600–1000 base pairs was chosen to ensure sufficient diversity and representation of sequence lengths for robust phylogenetic analysis. This range balances the inclusion of regions critical for determining evolutionary relationships while minimizing potential biases that may occur with overly short or excessively long sequences.
+
+```{r Data Checking, results='hide'}
+
+# Function `fn_datacheck` checks the data quality by summarizing key statistics for the dataset. It extracts the unique species names, counts the number of missing sequences, and calculates the number of unidentified nucleotides (N) and gaps in the sequences. It also provides a summary of the sequence lengths to ensure the data is within acceptable ranges for downstream analysis.
+fn_datacheck <- function(data) {
+  results <- list(
+  unique_species = unique(data$Species_Name),
+  missing_sequences = sum(is.na(data$Sequences)),
+  unidentified_nucleotides = sum(str_count(data$Sequences, "N")),
+  gaps_in_sequences = sum(str_count(data$Sequences, "-")),
+  sequence_length_summary = summary(data$Sequence_Length)
+)
+
+  return(results)
+}
+
+# fn_datacheck` function is applied to both the COI and CytB datasets to assess number of unidentified nucleotides and any other potential issues. 
+fn_datacheck(dfCOI_Acc) # 17 N's identified in COI and species names labelled as "UNVERIFIED:"
+fn_datacheck(dfCytB_Acc) # 15 N's identified in CytB
+
+# `fn_cleaning` function is used to clean the data, including the N's we just identified. It removes unverified species from the dataset to ensure only reliable data is retained. 
+# The function also removes leading and trailing unidentified nucleotides (N) and gaps (`-`) from sequences. 
+# Then it filters out sequences where more than 1% of the nucleotides are unidentified, which improves the overall quality of the dataset.
+fn_cleaning <- function(data) {
+  results <- data %>%
+    filter(!grepl("^UNVERIFIED:", Species_Name)) %>%
+    mutate(Sequences = str_remove_all(Sequences, "^N+|N+$|-")) %>%
+    filter(str_count(Sequences, "N") <= (0.01 * str_count(Sequences)))
+  
+  return(results)
+}
+
+# `fn_cleaning` function is applied to both the COI and CytB datasets. 
+# After cleaning, the number of unidentified nucleotides in the COI dataset is reduced to 7, and all unidentified nucleotides in the CytB dataset are removed.
+dfCOI_Acc <- fn_cleaning(dfCOI_Acc)
+fn_datacheck(dfCOI_Acc) # 7 remaining N's
+dfCytB_Acc <- fn_cleaning(dfCytB_Acc)
+fn_datacheck(dfCytB_Acc) # 0 remaining N's
+
+
+#`fn_shared_species` function identifies the species that are present in both the COI and CytB datasets. 
+# It filters each dataset to include only the shared species, which ensures consistency in downstream analyses since we are interested in comparing the phylogenetic relationships of the same species using the two genes.
+fn_shared_species <- function(df1, df2, name_species = "Species_Name") {
+  
+  shared_species <- intersect(df1[[name_species]], df2[[name_species]])
+  
+  df1_filtered <- df1 %>% 
+    filter(get(name_species) %in% shared_species)
+  df2_filtered <- df2 %>% 
+    filter(get(name_species) %in% shared_species)
+
+  return(list(df1 = df1_filtered, df2 = df2_filtered))
+}
+
+# `fn_shared_species` is applied and the COI and CytB datasets retain only the shared species.
+df_shared_species <- fn_shared_species(dfCytB_Acc, dfCOI_Acc)
+dfCytB_Acc <- df_shared_species$df1
+dfCOI_Acc <- df_shared_species$df2
+
+# This final check confirms that the filtered datasets contain only the 14 shared species (TRUE results), hence the data is consistent and ready for phylogenetic comparisons.
+unique(dfCytB_Acc$Species_Name) %in% (dfCOI_Acc$Species_Name) %>% 
+  summary() 
+
+```
+
+
+
+```{r Sequence Alignment, include=FALSE}
+
+# The class of the "Sequences" columns in the COI and CytB datasets were checked and were "character" class. 
+# The "Sequences" columns in the datasets were converted from a character string to `DNAStringSet` format to be compatible with the MUSCLE alignment function.
+#class(dfCOI_Acc$Sequences)
+dfCOI_Acc$Sequences <- DNAStringSet(dfCOI_Acc$Sequences)
+#class(dfCytB_Acc$Sequences)
+dfCytB_Acc$Sequences <- DNAStringSet(dfCytB_Acc$Sequences)
+
+# Species names were assigned as sequence names in the COI and CytB datasets to clearly associate each sequence with its corresponding species during and after the alignment process.
+names(dfCOI_Acc$Sequences) <- dfCOI_Acc$Species_Name
+names(dfCytB_Acc$Sequences) <- dfCytB_Acc$Species_Name
+
+
+# The COI sequences were aligned using the MUSCLE algorithm, which ensured homologous positions across sequences were properly aligned for downstream phylogenetic analysis. Then the aligned sequences were stored in `DNAStringSet` format.
+COI_aligned <- DNAStringSet(muscle::muscle(dfCOI_Acc$Sequences))
+CytB_aligned <- DNAStringSet(muscle::muscle(dfCytB_Acc$Sequences))
+
+# Aligned COI sequences were visually inspected using the BrowseSeqs function. This step ensured that alignment was performed correctly and helped identify any potential issues with the sequences.
+# BrowseSeqs(COI_aligned)
+# BrowseSeqs(CytB_aligned)
+
+```
+
+
+```{r Making Consensus Sequences, message=FALSE}
+
+# The unique species names from the CytB dataset are the same as the ones in the COI dataset, and were extracted and stored in the "shared_species" variable. This step allows for consensus sequences to only generate for the shared species in the next step.
+shared_species <- unique(dfCytB_Acc$Species_Name)
+
+# A consensus sequence was generated for each species in the COI dataset, then the "sapply" function was iterated through each shared species to select for sequences from the COI alignment that matched the species name.
+# The "consensusString" function generated a consensus sequence for each species with ambiguities mapped to "N" to account for variable positions.
+# Then the resulting consensus sequences were stored in a "DNAStringSet" object and species names were assigned to the sequences for traceability.
+# These steps were applied to the CytB dataset as well.
+COI_consensus <- DNAStringSet(sapply(shared_species, function(species) {
+  consensusString(COI_aligned[grepl(species, names(COI_aligned))], ambiguityMap = "N")
+}))
+names(COI_consensus) <- shared_species
+
+CytB_consensus <- DNAStringSet(sapply(shared_species, function(species) {
+  consensusString(CytB_aligned[grepl(species, names(CytB_aligned))], ambiguityMap = "N")
+}))
+names(CytB_consensus) <- shared_species
+
+```
+
+```{r Nucleotide Base Composition Exploration}
+
+# This code chunk checked the composition of nucleotide bases in the COI and CytB consensus sequences to assess the overall nucleotide distribution, which is critical for understanding patterns of sequence variation and evolutionary dynamics (Long et al., 2018). By examining the frequencies of A, T, G, and C bases, this step ensures the sequences are biologically plausible and do not contain biases or anomalies, like an overrepresentation of ambiguous bases (ex. N's). Since  nucleotide composition can influence substitution model selection and the accuracy of tree inference, this information is particularly important for our downstream phylogenetic analyses (Long et al., 2018). Also, comparing the base compositions of the COI and CytB genes across species can provide insights into potential differences in the functional or evolutionary constraints acting on these mitochondrial genes.
+
+# Function "fn_base_comp" was defined to calculate the nucleotide base composition for a set of DNA sequences (which would be COI and CytB sequences in our case).
+# The "alphabetFrequency" function computed the frequency of each base (A, T, G, C) as proportions (as.prob = TRUE). Then the result was converted into a data frame for easy manipulation and visualization.
+fn_base_comp <- function(sequences) {
+  alphabetFrequency(sequences, as.prob = TRUE) %>% 
+    as.data.frame()
+}
+
+# The "fn_base_comp" was applied for the COI and CytB consensus sequences.
+COI_base_comp <- fn_base_comp(COI_consensus)
+CytB_base_comp <- fn_base_comp(CytB_consensus)
+
+# Species names were added as a new column to both COI and CytB base composition data since this ensured that the base composition for each sequence could be associated with its corresponding species.
+COI_base_comp$Species <- shared_species
+CytB_base_comp$Species <- shared_species
+
+# Gene labels ("COI" and "CytB") were added to each dataset to differentiate the two sets of base compositions. This was needed for grouping and visualization in the combined dataset.
+COI_base_comp$Gene <- "COI"
+CytB_base_comp$Gene <- "CytB"
+
+# The COI and CytB base composition data were combined into a single data frame which allowed for efficient comparison and visualization of nucleotide composition across genes and species.
+base_comp <- rbind(COI_base_comp, CytB_base_comp)
+
+# The combined dataset was reshaped into a long format using "pivot_longer" since ggplot2 (next step) needed "tidy" format where each row was a single observation and each variable was a column. So A, T, G, C were each treated as a single variable and their corresponding frequencies stored in the Frequency variable.
+base_comp <- pivot_longer(base_comp, cols = c(A, T, G, C), names_to = "Base", values_to = "Frequency")
+
+# This bar plot visualized the nucleotide composition across species for the COI and CytB genes. The data was grouped by gene (using "facet_wrap") to compare base composition across COI and CytB separately.
+ggplot(base_comp, aes(x = Species, y = Frequency, fill = Base)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~ Gene) +
+  scale_fill_manual(
+  values = c(
+    "A" = "pink2",
+    "T" = "skyblue3",
+    "C" = "green4",
+    "G" = "purple2"
+  )
+) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(
+    title = "Nucleotide Composition Across Species in Accipitridae Family",
+    y = "Frequency",
+    x = "Species"
+  )
+
+```
+The nucleotide composition across species in the Accipitridae family for COI and CytB shows relatively consistent patterns, with adenine (A) and cytosine (C) being the most and least frequent bases, respectively. Both genes exhibit similar overall trends in nucleotide frequencies, but CytB shows slightly greater variability in guanine (G) content compared to COI. This analysis confirms that the sequences are biologically plausible and do not have major anomalies, like overrepresentation of ambiguous bases (ex. N's). 
+
+# Main Software Tools Description
+	The main software tool used in this project was the R package phytools (Revell, 2024). This package is widely used for phylogenetic analyses and provides functions for manipulating and visualizing phylogenetic trees. A key feature of phytools used in this study is the ability to create cophylogenetic (cophylo) plots, which display two phylogenetic trees side by side and connect matching species with links. This visualization method was used to compare the topological congruence of the COI and CytB phylogenetic trees. This method made it easier to identify similarities and differences in evolutionary relationships inferred from the two datasets. Our decision to use phytools was based on its flexibility and its specific functionality for visualizing tree congruence. The implementation in this study was guided by a vignette on the phytools blog which demonstrated the creation of cophylo plots (Revell, 2020). While following the vignette’s framework, modifications were made to suit the dataset and research goals. For instance, branch lengths were rescaled using compute.brlen to make the trees more compact and visually comparable. Additional customizations, such as adjusting the width, color, and type of links connecting the species, were applied to emphasize evolutionary differences between the trees while still maintaining clarity. While phytools is a powerful tool, it has limitations. It can be computationally intensive, especially for larger datasets, which may slow down the analysis. Other tools, such as the ape package by Paradis et al. (2024) were considered, but phytools was chosen for its superior visualization capabilities. By building on the methods outlined in the vignette, this study was able to apply the tool effectively to test our hypothesis about COI and CytB tree congruence.
+
+# Code Section 2 - Main Analysis
+```{r Model Testing based on AIC, results='hide'}
+
+# The consensus sequences for COI and CytB were converted to the "phyDat" format since this format is required for the next steps of model testing and tree reconstruction in phylogenetic analysis.
+# The "DNA" type specified that the input data consisted of nucleotide sequences.
+COI_phydat <- as.phyDat(COI_consensus, type = "DNA")
+CytB_phydat <- as.phyDat(CytB_consensus, type = "DNA")
+
+# Model testing was performed for both COI and CytB datasets to determine the most appropriate nucleotide substitution model for maximum likelihood (ML) phylogenetic analysis. Commonly used models for nucleotide data like JC (Jukes-Cantor), K80, TN93, and GTR (General Time Reversible) were tested (Schliep and Bardel-Kahr, 2024).
+# The "modelTest" function evaluated these models and computed metrics like the Akaike Information Criterion (AIC) which helped identify the best-fit model.
+COI_model <- modelTest(COI_phydat, model = c("JC", "K80", "TN93", "GTR", "HKY", "F81", "TIM1", "TIM2", "TIM3"))
+CytB_model <- modelTest(CytB_phydat, model = c("JC", "K80", "TN93", "GTR", "HKY", "F81", "TIM1", "TIM2", "TIM3"))
+
+# The best-fit model for each gene was identified by selecting the model with the lowest AIC value. The AIC measured the goodness of fit of the model while penalizing for model complexity which ensured a balance between accuracy and simplicity.
+COI_best_fit <- COI_model[which.min(COI_model$AIC), ]
+CytB_best_fit <- CytB_model[which.min(CytB_model$AIC), ]
+
+```
+
+```{r Best Fit Model Printed}
+# The best-fit models for COI and CytB were printed to clearly state which models were selected and will be used in the following phylogenetic tree reconstruction.
+cat("Best-fit model for COI:", COI_best_fit$Model, "\n") # TIM2+G(4) best-fit model for COI
+cat("Best-fit model for CytB:", CytB_best_fit$Model, "\n") # GTR+G(4) best-fit model for CytB
+```
+
+
+```{r Maximum Likelihood Phylogenetic Analysis}
+
+# The starting phylogenetic trees for both COI and CytB were estimated using the neighbour-joining (NJ) method which is an efficient method for generating an initial tree structure for the next step.
+# The "dist.ml" function calculated the pairwise distances between sequences based on the selected substitution model.
+COI_starting_tree <- nj(dist.ml(COI_phydat))
+CytB_starting_tree <- nj(dist.ml(CytB_phydat))
+
+# Maximum likelihood (ML) estimation was performed to fit the starting trees to the sequence data using the best-fit nucleotide substitution models selected in the previous code chunk.
+COI_fit <- pml(COI_starting_tree, data = COI_phydat, model = COI_best_fit$model)
+CytB_fit <- pml(CytB_starting_tree, data = CytB_phydat, model = CytB_best_fit$model)
+
+# The ML trees were optimized to refine branch lengths and model parameters.
+# The "optim.pml" function adjusted the tree topology (using nearest-neighbour interchange, optNni) and optimized base frequencies (optBf) and rate matrices (optQ). This step improved the fit of the tree to the data, making a more accurate representation of evolutionary relationships.
+COI_fit <- optim.pml(COI_fit, optNni = TRUE, optBf = TRUE, optQ = TRUE)
+CytB_fit <- optim.pml(CytB_fit, optNni = TRUE, optBf = TRUE, optQ = TRUE)
+
+# The optimized ML trees were extracted from the fitted objects for visualization and further analysis.
+COI_ML_tree <- COI_fit$tree
+CytB_ML_tree <- CytB_fit$tree
+
+# The ML trees were visualized using the "ggtree" package in a rectangular tree layout.
+COI_tree_plot <- ggtree(COI_ML_tree) +
+  geom_tiplab(aes(label = paste0("italic('", label, "')")), parse = TRUE, size = 3.4) +  
+  ggtitle("COI") +
+  xlim(0, 0.3) +  
+  theme_tree2() +
+  theme(plot.title = element_text(hjust = 0.5, size = 12, face = "bold"))
+
+CytB_tree_plot <- ggtree(CytB_ML_tree) +
+  geom_tiplab(aes(label = paste0("italic('", label, "')")), parse = TRUE, size = 3.4) +  
+  ggtitle("CytB") +
+  xlim(0, 0.3) +  
+  theme_tree2() +
+  theme(plot.title = element_text(hjust = 0.5, size = 12, face = "bold"))
+
+# The "patchwork" package allowed the COI and CytB tree plots to combine side by side for direct comparison.
+(COI_tree_plot | CytB_tree_plot) +
+  plot_annotation(
+    title = "Maximum Likelihood Phylogenetic Trees",
+    theme = theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"))
+  )
+
+```
+Both maximum likelihood phylogenetic trees for COI and CytB exhibit consistency in grouping closely related species such as Aquila nipalensis, Aquila rapax, and Aquila heliaca, which are clustered together in both gene trees. However, some discrepancies are observed, such as the placement of Gyps bengalensis, which differs between the COI and CytB trees. Additionally, species like Milvus migrans and Haliaeetus leucogaster are positioned differently, suggesting potential conflicts in phylogenetic signals.
+
+
+```{r Visual Topological Congruence of COI and CytB Phylogenetic Trees, message=FALSE}
+# This code chunk takes the COI and CytB phylogenetic trees from the previous step and creates a visual comparison of their topological congruence.
+# This visualization allows us to assess how well the two trees correspond to one another in terms of their topology and relationships between species.
+
+# The branch lengths of both COI and CytB trees were rescaled using the "compute.brlen" function to make them visually easier to compare.
+COI_ML_tree <- compute.brlen(COI_ML_tree, power = 0.8) 
+CytB_ML_tree <- compute.brlen(CytB_ML_tree, power = 0.8)
+
+# "cophylo" function was used to align the two trees side by side and draws connections between matching tip labels, which highlights similarities and differences in the tree structures. The trees were then plotted in the next step.
+cophylo_compare <- cophylo(COI_ML_tree, CytB_ML_tree)
+
+plot(cophylo_compare,
+     link.type = "curved",
+     link.lwd = 1.4,
+     link.col = "purple2",
+     fsize = 0.7,
+     x.lim = c(0, 1))
+title(main = "Comparison of COI (left) and CytB (right) Phylogenetic Trees", cex.main = 1, font.main = 2)
+
+```
+
+The maximum likelihood phylogenetic trees for COI and CytB are identical to the previous plot in the above code chunk. The dashed lines connecting the matching species across the two trees highlight the topological differences, emphasizing the partial agreement and misalignments in their phylogenetic patterns. 
+
+```{r Heatmap of Cophenetic Distance Differences}
+
+# This code chunk was conducted to create a heatmap that visually compared the cophenetic distance differences between the COI and CytB phylogenetic trees. Larger differences in pairwise evolutionary distances indicated the COI and CytB trees inferred different evolutionary relationships/histories for the same species, or biases in the data.
+# This step complimented the topological comparison by providing insight into the degree of congruence between the COI and CytB trees.
+
+
+# "cophenetic" function computed cophenetic distances for the COI and CytB phylogenetic trees.
+cophenetic_COI <- cophenetic(COI_ML_tree)
+cophenetic_CytB <- cophenetic(CytB_ML_tree)
+
+# The species names from the COI tree's tip labels (which are the same in the CytB's tree) were extracted and used as row and column names for both cophenetic distance matrices. This step ensured that the matrices were labeled consistently.
+species_names <- COI_ML_tree$tip.label
+rownames(cophenetic_COI) <- colnames(cophenetic_COI) <- species_names
+rownames(cophenetic_CytB) <- colnames(cophenetic_CytB) <- species_names
+
+# The absolute differences between the cophenetic distance matrices for COI and CytB were calculated.
+# A new matrix (diff_matrix) was generated that quantified the differences in evolutionary distances between the two trees for each species pair.
+# Using absolute differences made sure that only the magnitude of discrepancies was considered / avoided the impact of directionality.
+diff_matrix <- abs(as.matrix(cophenetic_COI) - as.matrix(cophenetic_CytB))
+
+# A heatmap was then created to visualize the absolute differences in cophenetic distances between the COI and CytB trees.
+# The option of clustering of rows and columns was disabled (`cluster_rows = FALSE`, `cluster_cols = FALSE`) to preserve the original species order and directly reflect pairwise differences.
+pheatmap(diff_matrix,
+         main = "Heatmap of Cophenetic Distance Differences b/w COI & CytB Trees",
+         color = colorRampPalette(c("white", "#556b2f", "black"))(100),
+         cluster_rows = FALSE,
+         cluster_cols = FALSE,
+         fontsize_row = 8, 
+         fontsize_col = 8)
+
+```
+The heatmap shows cophenetic distance differences between COI and CytB phylogenetic trees. Light cells indicate congruence in evolutionary distances (ex. Aquila rapax and Aquila heliaca), while dark cells highlight discrepancies (ex. Milvus migrans and Haliaeetus leucogaster). 
+
+# Results and Discussion
+
+The hypothesis that the mitochondrial COI and CytB genes would produce the same phylogenetic relationships for the Accipitridae family was partially supported by the results. The visual comparison of the COI and CytB trees using a cophylogenetic plot showed both congruences and discrepancies in the placement of species. For example, closely related species such as Aquila nipalensis, Aquila rapax, and Aquila heliaca were consistently clustered in both trees, indicating strong agreement in their phylogenetic patterns. However, there were notable mismatches like Gyps bengalensis which aligned differently in the two trees. The heatmap of cophenetic distance differences further highlighted these discrepancies. While some species pairs showed minimal differences in evolutionary distances (lighter cells on the heatmap), others such as Milvus migrans and Haliaeetus leucogaster exhibited significant differences (darker cells). These results suggest that while COI and CytB provide largely consistent phylogenetic patterns, there are conflicts because of factors such as differences in molecular evolutionary rates, selective constraints, or historical events like hybridization and introgression (Steenwyk et al., 2023; Xu et al., 2023). Previous studies have highlighted the challenges of relying on single mitochondrial genes because of gene-specific biases and incomplete lineage sorting (Connell et al., 2024; Duchene et al., 2017).
+  
+One key limitation of this study is the reliance on a relatively small dataset of 14 shared species, which may reduce the generalizability of the findings. Additionally, the study's focus on mitochondrial genes limits its ability to capture the full evolutionary history of the Accipitridae family, since mtDNA reflects only the maternal lineage (Ladoukakis and Zouros, 2017). This limitation could be particularly relevant for species with histories of hybridization or incomplete lineage sorting. Another caveat is that data availability may have introduced bias, since only species with sufficient sequence data were included, potentially skewing the results. Furthermore, relying specific substitution models assumes that these models accurately represent evolutionary processes, which may not always be the case (Shen et al., 2017).
+	
+Future research should expand upon this study by incorporating nuclear gene markers or genome-wide data, which can offer a more comprehensive understanding of Accipitridae evolutionary history. Expanding the sample size and taxonomic breadth would also enhance the robustness of the findings and help test the consistency of COI and CytB phylogenetic patterns across a broader range of species. Using alternative phylogenetic methods, such as Bayesian inference, could provide deeper insights into the causes of inconsistency between trees (Xu et al., 2023). Additionally, investigating the ecological and evolutionary contexts influencing these gene-specific differences like habitat-specific selection pressures or migration history would provide valuable insights (Steenwyk et al., 2023). Overall, this study highlights the importance of multi-locus approaches for addressing complex phylogenetic questions and evaluating the reliability of mitochondrial genes in evolutionary studies.
+
+# Reflection 
+
+Completing this project and course has been a wonderful learning experience. Through the quizzes and assignments, I gained practical skills in using bioinformatics tools, particularly in phylogenetic analysis, and strengthened my ability to troubleshoot and optimize code. The main takeaway for me was understanding how to structure an analysis to ensure reproducibility, from fetching data efficiently using APIs (ex. NCBI’s rentrez package) to applying advanced phylogenetic methods such as maximum likelihood tree reconstruction and comparison. I learned how to critically evaluate and refine my own scripts and those of my peers, identifying inefficiencies or biases and implementing improvements. These skills are invaluable as I continue working on computational analyses in future coursework or jobs. One of the key lessons I will carry forward is the importance of balancing technical accuracy with time management. At the beginning of this course, I struggled to efficiently handle large datasets and faced challenges when manually addressing errors. Over time, I improved my approach by relying more on functions, loops, and established software packages, which streamlined my work and made it scalable. This highlighted the importance of investing time upfront in proper coding practices, which reduces downstream challenges. I also realized the value of collaboration, especially through peer editing. Working with my group members on GitHub for Assignment 3 taught me the importance of clear communication and the need for establishing deadlines to avoid last-minute stress. Looking ahead, I aim to further develop my programming skills in R to enhance my efficiency in analyzing complex datasets. I also want to deepen my understanding of statistical methods and data visualization tools, especially since these are critical for conveying results in research. Additionally, improving my time management and project planning skills will be a priority, since these are essential for balancing the demands of graduate school and a future career in bioinformatics. Thank you so much for the amazing semester!
+
+# Acknowledgements
+
+Thank you to Revell (2020) for writing his blog post/vignette on coding a cophylogeny plot. I also thank Frances Bonafe for pointing out helpful documentation and providing moral support as I completed this assignment. 
+
+# References
+
+Connell, J. R., Lea, R. A., Haupt, L. M., & Griffiths, L. R. (2024). Mitochondrial DNA Analysis in Population Isolates: Challenges and Implications for Human Identification. Current Molecular Biology Reports, 10(1), 1–8. https://doi.org/10.1007/s40610-023-00155-4
+
+Duchene, D. A., Duchene, S., & Ho, S. Y. W. (2017). New Statistical Criteria Detect Phylogenetic Bias Caused by Compositional Heterogeneity. Molecular Biology and Evolution, 34(6), 1529–1534. https://doi.org/10.1093/molbev/msx092 
+
+Ladoukakis, E. D., & Zouros, E. (2017). Evolution and inheritance of animal mitochondrial DNA: rules and exceptions. Journal of Biological Research (Thessalonikē, Greece), 24(1), 1-. https://doi.org/10.1186/s40709-017-0060-4 
+
+Lerner, H. R. L., & Mindell, D. P. (2005). Phylogeny of eagles, Old World vultures, and other Accipitridae based on nuclear and mitochondrial DNA. Molecular Phylogenetics and Evolution, 37(2), 327–346. https://doi.org/10.1016/j.ympev.2005.04.010 
+
+Long, H., Sung, W., Kucukyildirim, S., Williams, E., Miller, S. F., Guo, W., Patterson, C., Gregory, C., Strauss, C., Stone, C., Berne, C., Kysela, D., Shoemaker, W. R., Muscarella, M. E., Luo, H., Lennon, J. T., Brun, Y. V., & Lynch, M. (2018). Evolutionary determinants of genome-wide nucleotide composition. Nature Ecology & Evolution, 2(2), 237–240. https://doi.org/10.1038/s41559-017-0425-y
+
+Luchetti, A., & Plazzi, F. (2022). Molecular Phylogenetics and Mitochondrial Evolution. MDPI - Multidisciplinary Digital Publishing Institute. https://doi.org/10.3390/books978-3-0365-3305-6 
+
+[NCBI] Taxonomy browser (Accipitridae). 2024. National Center for Biotechnology Information. https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=56259 
+
+Paradis, E., Blomberg, S., Bolker, B., Brown, J., Claramunt, S., Claude, J., Cuong, H. S., Desper, R., Didier, G., Durand, B., Dutheil, J., Ewing, R. J., Gascuel, O., Guillerme, T., Heibl, C., Ives, A., Jones, B., Krah, F., Lawson, D., Lefort, V., Legendre, P., Lemon, J., Louvel, G., Marcon, E., McCloskey, R., Nylander, J., Opgen-Rhein, R., Popescu, A. A., Royer-Carenzi, M., Schliep, K., Strimmer, K., & De Vienne, D. (2024). ape: Analyses of Phylogenetics and Evolution. https://cran.r-project.org/web/packages/ape/index.html
+
+Revell, L. J. (2020). Co-phylogenetic plotting with different color linking lines. http://blog.phytools.org/2020/12/co-phylogenetic-plotting-with-different.html
+
+Revell, L. J. (2024). phytools: Phylogenetic Tools for Comparative Biology (and Other Things). https://cran.r-project.org/web/packages/phytools/index.html
+
+Schliep, K., and Bardel-Kahr, I. Markov models and transition rate matrices. (2024, September 17). https://cran.r-project.org/web/packages/phangorn/vignettes/AdvancedFeatures.html
+
+Shen, X.-X., Hittinger, C. T., & Rokas, A. (2017). Contentious relationships in phylogenomic studies can be driven by a handful of genes. Nature Ecology & Evolution, 1(5), 126–126. https://doi.org/10.1038/s41559-017-0126
+
+Steenwyk, J. L., Li, Y., Zhou, X., Shen, X.-X., & Rokas, A. (2023). Incongruence in the phylogenomics era. Nature Reviews. Genetics, 24(12), 834–850. https://doi.org/10.1038/s41576-023-00620-x
+
+Stiller, J., Feng, S., Chowdhury, A.-A., Rivas-González, I., Duchêne, D. A., Fang, Q., Deng, Y., Kozlov, A., Stamatakis, A., Claramunt, S., Nguyen, J. M. T., Ho, S. Y. W., Faircloth, B. C., Haag, J., Houde, P., Cracraft, J., Balaban, M., Mai, U., Chen, G., … Zhang, G. (2024). Complexity of avian evolution revealed by family-level genomes. Nature (London), 629(8013), 851–860. https://doi.org/10.1038/s41586-024-07323-1 
+
+Xu, Y., Wei, Y., Zhou, Z., Cai, X., Boden, S. A., Umer, M. J., Safdar, L. B., Liu, Y., Jin, D., Hou, Y., Wang, Y., Wall, S. B., Wang, K., Yu, S., Zhang, B., Peng, R., & Liu, F. (2024). Widespread incomplete lineage sorting and introgression shaped adaptive radiation in the Gossypium genus. Plant Communications, 5(2), 100728–100728. https://doi.org/10.1016/j.xplc.2023.100728
+
